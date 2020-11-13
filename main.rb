@@ -1,9 +1,11 @@
 require 'net/http'
 require 'json'
+require 'date'
+require 'active_support/time'
 
 class PredictItAnalyzer
-  def initialize
-  end
+  MAXED_MARKETS = [6653, 6941, 6950].freeze
+  EXPECTED_ANNUAL_RETURN = 0.4 # Expect 40% annual return on investment (continually compounding)
 
   def fetch_data
     uri = URI('https://www.predictit.org/api/marketdata/all')
@@ -17,7 +19,7 @@ class PredictItAnalyzer
   def run
     fetch_data
     calculate_results
-    sort_results('guaranteed_profit')
+    sort_results('expected_profit')
     print_results
     play_alert
     sleep(50+rand(20))
@@ -50,10 +52,20 @@ class PredictItAnalyzer
       next unless guaranteed_profit
 
       result_details['current_buy_no_prices'] = buy_no_prices(market).compact.map {|p| (p * 100).round }
-      # result_details['current_sell_no_prices'] = sell_no_prices(market).compact.map {|p| (p * 100).round }
-      # result_details['sell_shares_advantage'] = (sell_shares_advantage(market) * 100).round(2)
       result_details['expected_profit'] = (calculate_expected_profit(market) * 100).round(2)
       result_details['guaranteed_profit'] = (guaranteed_profit * 100).round(2)
+
+      if (MAXED_MARKETS.include?(result_details['id'])) # For maxed markets, check if it is better to sell shares now
+        result_details['sell_shares_advantage'] = (sell_shares_advantage(market) * 100).round(2)
+        if result_details['sell_shares_advantage'] > 0
+          result_details['current_sell_no_prices'] = sell_no_prices(market).compact.map {|p| (p * 100).round }
+        end
+      elsif (result_details['expected_profit'] > 0 && result_details['guaranteed_profit'] < 0)
+        # For markets with positive expected profit, but no guaranteed profit determine how long term it is worth having money invested for
+        result_details['worth_purchasing_if_market_resolves_by'] =
+          Date.today +
+          (Math.log((result_details['guaranteed_profit'] - result_details['expected_profit']) / result_details['guaranteed_profit']) / EXPECTED_ANNUAL_RETURN * 365.0).to_i.days
+      end
 
       @results << result_details
     end
@@ -78,7 +90,7 @@ class PredictItAnalyzer
 
     profit_potential -= 1
 
-    @should_play_alert = true if profit_potential >= 0.01 && !ignore_markets.include?(market['id'].to_i)
+    @should_play_alert = true if profit_potential >= 0.01 && !MAXED_MARKETS.include?(market['id'])
     profit_potential
   end
 
@@ -114,7 +126,11 @@ class PredictItAnalyzer
   end
 
   def sell_shares_advantage(market)
-    -market['contracts'].length + 1.0 + sell_no_prices(market).compact.reduce(&:+)
+    result = -market['contracts'].length + 1.0 + sell_no_prices(market).compact.reduce(&:+)
+
+    @should_play_alert = true if result > 0.01
+
+    result
   end
 
   def buy_no_prices(market)
@@ -131,23 +147,25 @@ class PredictItAnalyzer
 
   def play_alert
     if @should_play_alert
-      6.times do
+      12.times do
         print "\a"
-        sleep(1)
+        sleep(0.25)
       end
     end
   end
 
-  def ignore_markets
+  def MAXED_MARKETS
     [6653, 6941, 6950]
   end
 
   def color(result)
     case true
-    when ignore_markets.include?(result['id'])
+    when MAXED_MARKETS.include?(result['id'])
       :blue
     when result['guaranteed_profit'] > 0.01
       :green
+    when result['sell_shares_advantage'] && result['sell_shares_advantage'] > 0.01
+      :pink
     when result['expected_profit'] > 0.01
       :yellow
     else
