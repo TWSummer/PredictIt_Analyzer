@@ -29,7 +29,7 @@ class PredictItAnalyzer
       puts ''
       puts ''
       result.each do |k, v|
-        puts "#{k}: #{v}"
+        puts "#{k}: #{v}".send(color(result))
       end
     end
   end
@@ -78,7 +78,7 @@ class PredictItAnalyzer
 
     profit_potential -= 1
 
-    @should_play_alert = true if profit_potential > 0 && !ignore_markets.include?(market['id'].to_i)
+    @should_play_alert = true if profit_potential >= 0.01 && !ignore_markets.include?(market['id'].to_i)
     profit_potential
   end
 
@@ -139,7 +139,51 @@ class PredictItAnalyzer
   end
 
   def ignore_markets
-    [6653, 6941]
+    [6653, 6941, 6950]
+  end
+
+  def color(result)
+    case true
+    when ignore_markets.include?(result['id'])
+      :blue
+    when result['guaranteed_profit'] > 0.01
+      :green
+    when result['expected_profit'] > 0.01
+      :yellow
+    else
+      :red
+    end
+  end
+end
+
+class String
+  # colorization
+  def colorize(color_code)
+    "\e[#{color_code}m#{self}\e[0m"
+  end
+
+  def red
+    colorize(31)
+  end
+
+  def green
+    colorize(32)
+  end
+
+  def yellow
+    colorize(33)
+  end
+
+  def blue
+    colorize(34)
+  end
+
+  def pink
+    colorize(35)
+  end
+
+  def light_blue
+    colorize(36)
   end
 end
 
