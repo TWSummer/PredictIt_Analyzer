@@ -38,7 +38,11 @@ class PredictItAnalyzer
 
   def sort_results(sort_field='guaranteed_profit')
     @results.sort! do |a, b|
-      a[sort_field] <=> b[sort_field]
+      # Sort any markets with sell_shares_advantage > 0 to the end of the list, otherwise sort by sort_field
+      a_value = a['sell_shares_advantage'] && a['sell_shares_advantage'] > 0 ? 1000 : a[sort_field]
+      b_value = b['sell_shares_advantage'] && b['sell_shares_advantage'] > 0 ? 1000 : b[sort_field]
+
+      a_value <=> b_value
     end
   end
 
