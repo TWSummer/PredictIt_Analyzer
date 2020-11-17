@@ -4,7 +4,7 @@ require 'date'
 require 'active_support/time'
 
 class PredictItAnalyzer
-  MAXED_MARKETS = [6653, 6941, 6950].freeze
+  MAXED_MARKETS = [6653, 6941, 6950, 2721, 3698, 6969].freeze
   EXPECTED_ANNUAL_RETURN = 0.4 # Expect 40% annual return on investment (continually compounding)
 
   def fetch_data
@@ -47,22 +47,23 @@ class PredictItAnalyzer
   end
 
   def calculate_results
-    @market_data['markets'].each do |market|
+    @market_data['markets'].each do |market_info|
+      market = Market.new(market_info)
       result_details = {}
-      result_details['name'] = market['name']
-      result_details['id'] = market['id']
+      result_details['name'] = market.name
+      result_details['id'] = market.id
 
-      guaranteed_profit = calculate_guaranteed_profit(market)
+      guaranteed_profit = market.calculate_guaranteed_profit
       next unless guaranteed_profit
 
-      result_details['current_buy_no_prices'] = buy_no_prices(market).compact.map {|p| (p * 100).round }
-      result_details['expected_profit'] = (calculate_expected_profit(market) * 100).round(2)
+      result_details['current_buy_no_prices'] = market.buy_no_prices.compact.map {|p| (p * 100).round }
+      result_details['expected_profit'] = (market.calculate_expected_profit * 100).round(2)
       result_details['guaranteed_profit'] = (guaranteed_profit * 100).round(2)
 
       if (MAXED_MARKETS.include?(result_details['id'])) # For maxed markets, check if it is better to sell shares now
-        result_details['sell_shares_advantage'] = (sell_shares_advantage(market) * 100).round(2)
+        result_details['sell_shares_advantage'] = (market.sell_shares_advantage * 100).round(2)
         if result_details['sell_shares_advantage'] > 0
-          result_details['current_sell_no_prices'] = sell_no_prices(market).compact.map {|p| (p * 100).round }
+          result_details['current_sell_no_prices'] = market.sell_no_prices.compact.map {|p| (p * 100).round }
         end
       elsif (result_details['expected_profit'] > 0 && result_details['guaranteed_profit'] < 0)
         # For markets with positive expected profit, but no guaranteed profit determine how long term it is worth having money invested for
@@ -71,82 +72,11 @@ class PredictItAnalyzer
           (Math.log((result_details['guaranteed_profit'] - result_details['expected_profit']) / result_details['guaranteed_profit']) / EXPECTED_ANNUAL_RETURN * 365.0).to_i.days
       end
 
+      @should_play_alert = market.should_alert && !MAXED_MARKETS.include?(market.id)
       @results << result_details
     end
 
 
-  end
-
-  def calculate_guaranteed_profit(market)
-    buy_no_prices = buy_no_prices(market).compact.sort
-
-    return nil if buy_no_prices.length < 2
-
-    profit_potential = 0
-
-    lowest_price = buy_no_prices.pop
-
-    profit_potential += (1.0 - lowest_price)
-
-    buy_no_prices.each do |price|
-      profit_potential += 0.9 * (1.0 - price)
-    end
-
-    profit_potential -= 1
-
-    @should_play_alert = true if profit_potential >= 0.01 && !MAXED_MARKETS.include?(market['id'])
-    profit_potential
-  end
-
-  def calculate_expected_profit(market)
-    probabilities = market['contracts'].map do |contract|
-      if !contract['bestBuyNoCost']
-        0.0
-      elsif !contract['bestBuyYesCost']
-        1.0
-      else
-        (contract['bestBuyYesCost'] + (1 - contract['bestBuyNoCost'])) / 2.0
-      end
-    end
-
-    total_probability = probabilities.reduce(&:+)
-    probabilities.map! {|p| p / total_probability }
-
-    buy_no_prices = buy_no_prices(market)
-
-    profit_potential = 0.0
-
-    buy_no_prices.each_with_index do |loss_if_yes, index|
-      next unless loss_if_yes
-
-      yes_probability = probabilities[index]
-      no_probability = 1.0 - yes_probability
-      gain_if_no = 1.0 - loss_if_yes
-
-      profit_potential += (0.9 * no_probability * gain_if_no) - (yes_probability * loss_if_yes)
-    end
-
-    profit_potential
-  end
-
-  def sell_shares_advantage(market)
-    result = -market['contracts'].length + 1.0 + sell_no_prices(market).compact.reduce(&:+)
-
-    @should_play_alert = true if result > 0.01
-
-    result
-  end
-
-  def buy_no_prices(market)
-    market['contracts'].map do |contract|
-      contract['bestBuyNoCost']
-    end
-  end
-
-  def sell_no_prices(market)
-    market['contracts'].map do |contract|
-      contract['bestSellNoCost']
-    end
   end
 
   def play_alert
@@ -156,10 +86,6 @@ class PredictItAnalyzer
         sleep(0.25)
       end
     end
-  end
-
-  def MAXED_MARKETS
-    [6653, 6941, 6950]
   end
 
   def color(result)
@@ -176,6 +102,95 @@ class PredictItAnalyzer
       :red
     end
   end
+end
+
+class Market
+  def initialize(data)
+    @data = data
+  end
+
+  attr_reader :should_alert
+
+  def id
+    @data['id']
+  end
+
+  def name
+    @data['name']
+  end
+
+  def calculate_guaranteed_profit
+    sorted_buy_no_prices = buy_no_prices.compact.sort
+
+    return nil if sorted_buy_no_prices.length < 2
+
+    profit_potential = 0
+
+    lowest_price = sorted_buy_no_prices.pop
+
+    profit_potential += (1.0 - lowest_price)
+
+    sorted_buy_no_prices.each do |price|
+      profit_potential += 0.9 * (1.0 - price)
+    end
+
+    profit_potential -= 1
+
+    @should_alert = true if profit_potential >= 0.01
+    profit_potential
+  end
+
+  def calculate_expected_profit
+    probabilities = @data['contracts'].map do |contract|
+      if !contract['bestBuyNoCost']
+        0.0
+      elsif !contract['bestBuyYesCost']
+        1.0
+      else
+        (contract['bestBuyYesCost'] + (1 - contract['bestBuyNoCost'])) / 2.0
+      end
+    end
+
+    total_probability = probabilities.reduce(&:+)
+    probabilities.map! {|p| p / total_probability }
+
+    market_buy_no_prices = buy_no_prices
+
+    profit_potential = 0.0
+
+    market_buy_no_prices.each_with_index do |loss_if_yes, index|
+      next unless loss_if_yes
+
+      yes_probability = probabilities[index]
+      no_probability = 1.0 - yes_probability
+      gain_if_no = 1.0 - loss_if_yes
+
+      profit_potential += (0.9 * no_probability * gain_if_no) - (yes_probability * loss_if_yes)
+    end
+
+    profit_potential
+  end
+
+  def sell_shares_advantage
+    result = -@data['contracts'].length + 1.0 + sell_no_prices.compact.reduce(&:+)
+
+    @should_alert = true if result > 0.01
+
+    result
+  end
+
+  def buy_no_prices
+    @data['contracts'].map do |contract|
+      contract['bestBuyNoCost']
+    end
+  end
+
+  def sell_no_prices
+    @data['contracts'].map do |contract|
+      contract['bestSellNoCost']
+    end
+  end
+
 end
 
 class String
